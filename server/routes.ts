@@ -13,11 +13,15 @@ import {
   ensureDemoSandboxCustomMatch,
   extractOtpCode,
   fetchLiveInboundSms,
+  fetchOwnedProviderNumbers,
   getCredentialStatuses,
   hasConfiguredLiveProvider,
+  isProviderReady,
   provisionLiveNumber,
   releaseLiveNumber,
+  sanitizeCredentialValue,
   searchLiveProviderNumbers,
+  testLiveProviderConnection,
   type ProviderMeta,
 } from './providers.ts';
 import { emitToAll, emitToUser } from './realtime.ts';
@@ -289,8 +293,7 @@ export function registerApiRoutes(app: Express) {
     }>;
 
     const formattedProviders = providers.map((p) => {
-      const creds = getCredentialStatuses(p.id, p.code);
-      const isConfigured = p.is_demo === 1 || (creds.length > 0 && creds.every((c) => c.configured));
+      const isConfigured = p.is_demo === 1 || isProviderReady(p.id, p.code);
       return {
         id: p.id,
         code: p.code,
@@ -333,55 +336,85 @@ export function registerApiRoutes(app: Express) {
     const activePattern = customPattern || pattern;
     let liveApiWarning: string | null = null;
 
-    // If user explicitly requests an official live provider (and credentials are configured), fetch real inventory
-    if (providerCode && providerCode !== 'demo_sandbox' && providerCode !== 'all') {
-      const provider = db
-        .prepare('SELECT * FROM providers WHERE code = ? AND is_active = 1')
-        .get(providerCode) as ProviderMeta | undefined;
+    // Query configured official live providers (both when explicitly chosen AND when providerCode === 'all')
+    if (providerCode !== 'demo_sandbox') {
+      const targetProviders =
+        providerCode && providerCode !== 'all'
+          ? (db.prepare('SELECT * FROM providers WHERE code = ? AND is_active = 1 AND is_demo = 0').all(providerCode) as ProviderMeta[])
+          : (db.prepare('SELECT * FROM providers WHERE is_active = 1 AND is_demo = 0').all() as ProviderMeta[]);
 
-      if (provider && provider.is_demo === 0) {
-        const statuses = getCredentialStatuses(provider.id, provider.code);
-        const ready = statuses.length > 0 && statuses.every((c) => c.configured);
+      const effectiveCountry = !countryCode || countryCode === 'ALL' ? 'US' : countryCode;
 
-        if (ready) {
-          try {
-            const liveNumbers = await searchLiveProviderNumbers({
-              provider,
-              countryCode: countryCode || 'US',
-              pattern: activePattern,
-            });
-            const countryInfo = COUNTRY_METADATA.find((c) => c.code === (countryCode || 'US')) || COUNTRY_METADATA[1];
-            const upsert = db.prepare(`
-              INSERT INTO virtual_numbers (
-                id, provider_id, phone_number, country_code, country_name, dial_code, carrier,
-                pattern_category, matched_pattern, price_10m, price_30m, price_1h, price_24h,
-                status, is_demo, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 20000, 35000, 55000, 120000, 'Available', 0, ?)
-              ON CONFLICT(phone_number) DO UPDATE SET
-                provider_id = excluded.provider_id,
-                is_demo = 0
-            `);
-            for (const item of liveNumbers) {
-              const tail = item.phoneNumber.replace(/\D/g, '').slice(-4);
-              upsert.run(
-                crypto.randomUUID(),
-                provider.id,
-                item.phoneNumber,
-                countryInfo.code,
-                countryInfo.name,
-                countryInfo.dialCode,
-                item.carrier,
-                classifyPatternCategory(tail),
-                activePattern || tail,
-                Date.now()
-              );
-            }
-          } catch (err) {
-            liveApiWarning =
-              err instanceof Error ? err.message : 'Gagal terhubung ke API provider resmi.';
+      for (const provider of targetProviders) {
+        const ready = isProviderReady(provider.id, provider.code);
+
+        if (!ready) {
+          if (providerCode && providerCode !== 'all') {
+            liveApiWarning = `Kredensial API untuk ${provider.name} belum dikonfigurasi. Menampilkan katalog mode DEMO.`;
           }
-        } else {
-          liveApiWarning = `Kredensial API untuk ${provider.name} belum dikonfigurasi. Menampilkan katalog mode DEMO.`;
+          continue;
+        }
+
+        const upsert = db.prepare(`
+          INSERT INTO virtual_numbers (
+            id, provider_id, phone_number, country_code, country_name, dial_code, carrier,
+            pattern_category, matched_pattern, price_10m, price_30m, price_1h, price_24h,
+            status, is_demo, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 20000, 35000, 55000, 120000, 'Available', 0, ?)
+          ON CONFLICT(phone_number) DO UPDATE SET
+            provider_id = excluded.provider_id,
+            is_demo = 0,
+            status = CASE WHEN virtual_numbers.status = 'Active' THEN 'Active' ELSE 'Available' END
+        `);
+
+        try {
+          // 1. Sync numbers already owned on the provider account (works even on Twilio Trial!)
+          const ownedNumbers = await fetchOwnedProviderNumbers(provider);
+          for (const owned of ownedNumbers) {
+            const cInfo = COUNTRY_METADATA.find((c) => c.code === owned.countryCode) || COUNTRY_METADATA[1];
+            const tail = owned.phoneNumber.replace(/\D/g, '').slice(-4);
+            upsert.run(
+              crypto.randomUUID(),
+              provider.id,
+              owned.phoneNumber,
+              cInfo.code,
+              cInfo.name,
+              cInfo.dialCode,
+              owned.carrier,
+              classifyPatternCategory(tail),
+              activePattern || tail,
+              Date.now()
+            );
+          }
+
+          // 2. Search available numbers from official provider REST API
+          const liveNumbers = await searchLiveProviderNumbers({
+            provider,
+            countryCode: effectiveCountry,
+            pattern: activePattern,
+          });
+          const countryInfo = COUNTRY_METADATA.find((c) => c.code === effectiveCountry) || COUNTRY_METADATA[1];
+          for (const item of liveNumbers) {
+            const tail = item.phoneNumber.replace(/\D/g, '').slice(-4);
+            upsert.run(
+              crypto.randomUUID(),
+              provider.id,
+              item.phoneNumber,
+              countryInfo.code,
+              countryInfo.name,
+              countryInfo.dialCode,
+              item.carrier,
+              classifyPatternCategory(tail),
+              activePattern || tail,
+              Date.now()
+            );
+          }
+
+          if (liveNumbers.length === 0 && ownedNumbers.length === 0 && providerCode !== 'all') {
+            liveApiWarning = `${provider.name} terhubung, tetapi tidak ada stok nomor tersedia untuk negara ${effectiveCountry}${activePattern ? ` dengan pola ${activePattern}` : ''}. Coba pilih negara United States (+1) atau hapus filter pola.`;
+          }
+        } catch (err) {
+          liveApiWarning = err instanceof Error ? err.message : 'Gagal terhubung ke API provider resmi.';
         }
       }
     }
@@ -929,9 +962,27 @@ export function registerApiRoutes(app: Express) {
   // Official Provider Webhook for real-time inbound SMS (Twilio / Vonage / Telnyx)
   app.post('/api/webhooks/sms/:providerCode', (req: Request, res: Response) => {
     const providerCode = String(req.params.providerCode || '').toLowerCase();
-    const toNumber = String(req.body?.To || req.body?.to || req.body?.msisdn || '').trim();
-    const fromSender = String(req.body?.From || req.body?.from || 'CarrierSMS').trim();
-    const textBody = String(req.body?.Body || req.body?.text || '').trim();
+
+    let toNumber = '';
+    let fromSender = 'CarrierSMS';
+    let textBody = '';
+
+    if (providerCode === 'telnyx' && req.body?.data) {
+      const eventType = String(req.body.data.event_type || '');
+      if (eventType && eventType !== 'message.received') {
+        res.status(200).json({ ignored: true, eventType });
+        return;
+      }
+      const payload = req.body.data.payload || {};
+      const toList = Array.isArray(payload.to) ? payload.to : [];
+      toNumber = String(toList[0]?.phone_number || payload.to?.phone_number || '').trim();
+      fromSender = String(payload.from?.phone_number || payload.from || 'TelnyxSMS').trim();
+      textBody = String(payload.text || '').trim();
+    } else {
+      toNumber = String(req.body?.To || req.body?.to || req.body?.msisdn || '').trim();
+      fromSender = String(req.body?.From || req.body?.from || 'CarrierSMS').trim();
+      textBody = String(req.body?.Body || req.body?.text || '').trim();
+    }
 
     if (!toNumber || !textBody) {
       res.status(400).json({ error: 'Payload webhook SMS tidak lengkap.' });
@@ -1259,7 +1310,8 @@ export function registerApiRoutes(app: Express) {
       for (const keyName of allowedKeys) {
         const rawVal = credentials[keyName];
         if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
-          const cleanVal = rawVal.trim();
+          const cleanVal = sanitizeCredentialValue(keyName, rawVal);
+          if (!cleanVal) continue;
           const encrypted = encryptSecret(cleanVal);
           const masked = maskSecret(cleanVal);
           db.prepare(
@@ -1274,7 +1326,42 @@ export function registerApiRoutes(app: Express) {
       }
     })();
 
+    emitToAll('stats:updated', { timestamp: now });
     res.json({ ok: true, message: `Konfigurasi ${provider.name} berhasil disimpan secara terenkripsi.` });
+  });
+
+  app.post('/api/admin/providers/:id/test', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const provider = db.prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id) as ProviderMeta | undefined;
+    if (!provider) {
+      res.status(404).json({ error: 'Provider tidak ditemukan.' });
+      return;
+    }
+
+    // Save any newly typed credentials in the same request before testing
+    const credentials = (req.body?.credentials || {}) as Record<string, string>;
+    const allowedKeys = PROVIDER_KEY_SPEC[provider.code] || [];
+    const now = Date.now();
+    for (const keyName of allowedKeys) {
+      const rawVal = credentials[keyName];
+      if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+        const cleanVal = sanitizeCredentialValue(keyName, rawVal);
+        if (!cleanVal) continue;
+        db.prepare(
+          `INSERT INTO provider_credentials (id, provider_id, key_name, encrypted_value, masked_preview, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(provider_id, key_name) DO UPDATE SET
+             encrypted_value = excluded.encrypted_value,
+             masked_preview = excluded.masked_preview,
+             updated_at = excluded.updated_at`
+        ).run(crypto.randomUUID(), provider.id, keyName, encryptSecret(cleanVal), maskSecret(cleanVal), now);
+      }
+    }
+
+    const result = await testLiveProviderConnection(provider);
+    if (result.ok) {
+      emitToAll('stats:updated', { timestamp: Date.now() });
+    }
+    res.json(result);
   });
 
   app.get('/api/admin/numbers', requireAdmin, (_req: AuthenticatedRequest, res: Response) => {

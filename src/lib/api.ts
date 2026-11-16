@@ -38,6 +38,14 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const errMsg = typeof data?.error === 'string' ? data.error : `Permintaan gagal (${response.status})`;
+    if (
+      response.status === 401 &&
+      !path.startsWith('/api/auth/login') &&
+      !path.startsWith('/api/auth/register')
+    ) {
+      setStoredToken(null);
+      window.dispatchEvent(new CustomEvent('bn:unauthorized', { detail: errMsg }));
+    }
     throw new Error(errMsg);
   }
   return data as T;

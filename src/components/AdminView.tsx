@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   BarChart3,
+  Check,
+  Copy,
   KeyRound,
+  Link2,
   Plus,
   Receipt,
   Save,
@@ -31,6 +34,21 @@ export function AdminView({ onNotify }: AdminViewProps) {
   // Provider credential editing map
   const [credInputs, setCredInputs] = useState<Record<string, Record<string, string>>>({});
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; details: string; error?: string }>>({});
+  const [copiedWebhookCode, setCopiedWebhookCode] = useState<string | null>(null);
+
+  const handleCopyWebhook = async (providerCode: string) => {
+    const url = `${window.location.origin}/api/webhooks/sms/${providerCode}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedWebhookCode(providerCode);
+      onNotify('success', 'Webhook URL disalin', url);
+      setTimeout(() => setCopiedWebhookCode(null), 2000);
+    } catch {
+      onNotify('info', 'Salin manual URL webhook', url);
+    }
+  };
 
   // New number form
   const [newPhone, setNewPhone] = useState('');
@@ -94,6 +112,31 @@ export function AdminView({ onNotify }: AdminViewProps) {
       onNotify('error', 'Gagal menyimpan provider', err instanceof Error ? err.message : undefined);
     } finally {
       setSavingProviderId(null);
+    }
+  };
+
+  const handleTestProvider = async (prov: AdminProvider) => {
+    setTestingProviderId(prov.id);
+    try {
+      const credentials = credInputs[prov.id] || {};
+      const res = await apiRequest<{ ok: boolean; details: string; error?: string }>(
+        `/api/admin/providers/${prov.id}/test`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ credentials }),
+        }
+      );
+      setTestResults((prev) => ({ ...prev, [prov.id]: res }));
+      if (res.ok) {
+        onNotify('success', `${prov.name} terhubung`, res.details);
+        await loadAllAdminData();
+      } else {
+        onNotify('error', `Koneksi ${prov.name} gagal`, res.error);
+      }
+    } catch (err) {
+      onNotify('error', 'Gagal menguji koneksi', err instanceof Error ? err.message : undefined);
+    } finally {
+      setTestingProviderId(null);
     }
   };
 
@@ -323,9 +366,17 @@ export function AdminView({ onNotify }: AdminViewProps) {
                           </div>
                           <input
                             id={`${prov.id}-${cred.keyName}`}
-                            type="password"
+                            type={cred.keyName === 'TELNYX_MESSAGING_PROFILE_ID' ? 'text' : 'password'}
                             autoComplete="new-password"
-                            placeholder={cred.configured ? 'Masukkan nilai baru untuk mengganti' : `Isi ${cred.keyName}`}
+                            placeholder={
+                              cred.configured
+                                ? 'Masukkan nilai baru untuk mengganti'
+                                : cred.keyName === 'TELNYX_API_KEY'
+                                  ? 'KEY... (dari API Keys Telnyx)'
+                                  : cred.keyName === 'TELNYX_MESSAGING_PROFILE_ID'
+                                    ? 'UUID Messaging Profile (opsional tapi disarankan)'
+                                    : `Isi ${cred.keyName}`
+                            }
                             value={credInputs[prov.id]?.[cred.keyName] || ''}
                             onChange={(e) =>
                               setCredInputs((prev) => ({
@@ -344,16 +395,71 @@ export function AdminView({ onNotify }: AdminViewProps) {
                   )}
 
                   {!prov.isDemo && (
-                    <div className="mt-4 flex justify-end">
-                      <button
-                        type="button"
-                        disabled={savingProviderId === prov.id}
-                        onClick={() => handleSaveProvider(prov)}
-                        className="min-h-[42px] px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors disabled:opacity-50"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        <span>{savingProviderId === prov.id ? 'Menyimpan...' : 'Simpan Kredensial Terenkripsi'}</span>
-                      </button>
+                    <div className="mt-4 space-y-3">
+                      <div className="p-3.5 rounded-xl bg-[#070C1A] border border-slate-800/90 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-slate-300 inline-flex items-center gap-1.5">
+                            <Link2 className="w-3.5 h-3.5 text-sky-400" />
+                            Inbound SMS Webhook URL ({prov.name})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyWebhook(prov.code)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 text-[11px] font-semibold inline-flex items-center gap-1 transition-colors"
+                          >
+                            {copiedWebhookCode === prov.code ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span>Tersalin</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Salin URL</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div className="font-mono text-[11px] text-sky-300 break-all select-all">
+                          {`${window.location.origin}/api/webhooks/sms/${prov.code}`}
+                        </div>
+                        {prov.code === 'telnyx' && (
+                          <p className="text-[11px] text-slate-400 leading-relaxed">
+                            Tempel URL ini di Telnyx Portal → Messaging Profile → <span className="text-slate-200">Inbound Settings → Webhook URL</span>. Pastikan <code className="font-mono text-sky-300">TELNYX_API_KEY</code> diisi API Key (<code className="font-mono">KEY...</code>) dari menu <span className="text-slate-200">Account Settings → Keys & Credentials</span>, sedangkan ID UUID Profile diisi ke <code className="font-mono text-sky-300">TELNYX_MESSAGING_PROFILE_ID</code>.
+                          </p>
+                        )}
+                      </div>
+                      {testResults[prov.id] && (
+                        <div
+                          className={`p-3 rounded-xl border text-xs ${
+                            testResults[prov.id].ok
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                          }`}
+                        >
+                          {testResults[prov.id].ok ? testResults[prov.id].details : testResults[prov.id].error}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap justify-end gap-2.5">
+                        <button
+                          type="button"
+                          disabled={testingProviderId === prov.id}
+                          onClick={() => handleTestProvider(prov)}
+                          className="min-h-[42px] px-4 py-2 rounded-xl bg-[#070C1A] hover:bg-slate-800 border border-slate-700 text-sky-300 text-xs font-semibold inline-flex items-center gap-2 transition-colors disabled:opacity-50"
+                        >
+                          <Server className="w-3.5 h-3.5" />
+                          <span>{testingProviderId === prov.id ? 'Menguji...' : 'Uji Koneksi API'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingProviderId === prov.id}
+                          onClick={() => handleSaveProvider(prov)}
+                          className="min-h-[42px] px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors disabled:opacity-50"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{savingProviderId === prov.id ? 'Menyimpan...' : 'Simpan Kredensial Terenkripsi'}</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

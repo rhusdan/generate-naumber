@@ -88,6 +88,19 @@ export default function App() {
     }
   }, [user?.id, loadWorkspaceData]);
 
+  useEffect(() => {
+    const onUnauthorized = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      setUser(null);
+      setStats(null);
+      setRentals([]);
+      setSelectedRentalId(null);
+      notify('error', 'Sesi login berakhir (401)', detail || 'Silakan login kembali.');
+    };
+    window.addEventListener('bn:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('bn:unauthorized', onUnauthorized);
+  }, [notify]);
+
   // 1-second live countdown clock when user has active rentals
   useEffect(() => {
     const timer = window.setInterval(() => {
