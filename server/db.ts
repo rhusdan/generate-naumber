@@ -319,51 +319,49 @@ function seedInitialData() {
     }
   }
 
-  const sixDigitCount = (
-    db.prepare(`SELECT COUNT(*) as cnt FROM virtual_numbers WHERE pattern_category = '6 Digit Kembar'`).get() as {
-      cnt: number;
-    }
-  ).cnt;
+  const insertSixDigit = db.prepare(`
+    INSERT OR IGNORE INTO virtual_numbers (
+      id, provider_id, phone_number, country_code, country_name, dial_code, carrier,
+      pattern_category, matched_pattern, price_10m, price_30m, price_1h, price_24h,
+      status, is_demo, created_at
+    ) VALUES (?, 'prov-demo', ?, ?, ?, ?, ?, '6 Digit Kembar', ?, ?, ?, ?, ?, 'Available', 1, ?)
+  `);
 
-  if (sixDigitCount === 0) {
-    const insertSixDigit = db.prepare(`
-      INSERT OR IGNORE INTO virtual_numbers (
-        id, provider_id, phone_number, country_code, country_name, dial_code, carrier,
-        pattern_category, matched_pattern, price_10m, price_30m, price_1h, price_24h,
-        status, is_demo, created_at
-      ) VALUES (?, 'prov-demo', ?, ?, ?, ?, ?, '6 Digit Kembar', ?, ?, ?, ?, ?, 'Available', 1, ?)
-    `);
+  const sixDigitCatalog: Array<[string, string, string, string, string, string, number, number, number, number]> = [
+    ['+62 811-99-999999', 'ID', 'Indonesia', '+62', 'Telkomsel', '999999', 24000, 42000, 70000, 150000],
+    ['+62 811-88-888888', 'ID', 'Indonesia', '+62', 'Telkomsel', '888888', 25000, 45000, 75000, 160000],
+    ['+62 812-77-777777', 'ID', 'Indonesia', '+62', 'Telkomsel', '777777', 24000, 42000, 70000, 150000],
+    ['+62 815-66-666666', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '666666', 21000, 38000, 64000, 135000],
+    ['+62 817-55-555555', 'ID', 'Indonesia', '+62', 'XL Axiata', '555555', 21000, 38000, 64000, 135000],
+    ['+62 818-44-444444', 'ID', 'Indonesia', '+62', 'XL Axiata', '444444', 20000, 36000, 60000, 128000],
+    ['+62 816-33-333333', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '333333', 20000, 36000, 60000, 128000],
+    ['+62 812-22-222222', 'ID', 'Indonesia', '+62', 'Telkomsel', '222222', 20000, 36000, 60000, 128000],
+    ['+62 813-11-111111', 'ID', 'Indonesia', '+62', 'Telkomsel', '111111', 22000, 39000, 65000, 140000],
+    ['+62 856-00-000000', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '000000', 22000, 39000, 65000, 140000],
+    ['+62 815-99-999999', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '999999', 23000, 40000, 68000, 145000],
+    ['+62 817-66-666666', 'ID', 'Indonesia', '+62', 'XL Axiata', '666666', 21000, 38000, 64000, 135000],
+    ['+1 (415) 77-777777', 'US', 'United States', '+1', 'AT&T Mobility', '777777', 28000, 52000, 86000, 180000],
+    ['+1 (212) 88-888888', 'US', 'United States', '+1', 'T-Mobile US', '888888', 30000, 55000, 92000, 195000],
+    ['+65 88-888888', 'SG', 'Singapore', '+65', 'Singtel', '888888', 29000, 54000, 88000, 185000],
+    ['+60 12-999999', 'MY', 'Malaysia', '+60', 'Maxis', '999999', 22000, 40000, 66000, 138000],
+    ['+44 77-777777', 'GB', 'United Kingdom', '+44', 'Vodafone UK', '777777', 27000, 49000, 82000, 172000],
+    ['+81 90-888888', 'JP', 'Japan', '+81', 'NTT Docomo', '888888', 31000, 58000, 95000, 200000],
+  ];
 
-    const sixDigitCatalog: Array<[string, string, string, string, string, string, number, number, number, number]> = [
-      ['+62 811-88-888888', 'ID', 'Indonesia', '+62', 'Telkomsel', '888888', 25000, 45000, 75000, 160000],
-      ['+62 812-77-777777', 'ID', 'Indonesia', '+62', 'Telkomsel', '777777', 24000, 42000, 70000, 150000],
-      ['+62 815-99-999999', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '999999', 23000, 40000, 68000, 145000],
-      ['+62 817-66-666666', 'ID', 'Indonesia', '+62', 'XL Axiata', '666666', 21000, 38000, 64000, 135000],
-      ['+62 813-11-111111', 'ID', 'Indonesia', '+62', 'Telkomsel', '111111', 22000, 39000, 65000, 140000],
-      ['+62 856-00-000000', 'ID', 'Indonesia', '+62', 'Indosat Ooredoo', '000000', 22000, 39000, 65000, 140000],
-      ['+1 (415) 77-777777', 'US', 'United States', '+1', 'AT&T Mobility', '777777', 28000, 52000, 86000, 180000],
-      ['+1 (212) 88-888888', 'US', 'United States', '+1', 'T-Mobile US', '888888', 30000, 55000, 92000, 195000],
-      ['+65 88-888888', 'SG', 'Singapore', '+65', 'Singtel', '888888', 29000, 54000, 88000, 185000],
-      ['+60 12-999999', 'MY', 'Malaysia', '+60', 'Maxis', '999999', 22000, 40000, 66000, 138000],
-      ['+44 77-777777', 'GB', 'United Kingdom', '+44', 'Vodafone UK', '777777', 27000, 49000, 82000, 172000],
-      ['+81 90-888888', 'JP', 'Japan', '+81', 'NTT Docomo', '888888', 31000, 58000, 95000, 200000],
-    ];
-
-    for (const item of sixDigitCatalog) {
-      insertSixDigit.run(
-        crypto.randomUUID(),
-        item[0],
-        item[1],
-        item[2],
-        item[3],
-        item[4],
-        item[5],
-        item[6],
-        item[7],
-        item[8],
-        item[9],
-        now
-      );
-    }
+  for (const item of sixDigitCatalog) {
+    insertSixDigit.run(
+      crypto.randomUUID(),
+      item[0],
+      item[1],
+      item[2],
+      item[3],
+      item[4],
+      item[5],
+      item[6],
+      item[7],
+      item[8],
+      item[9],
+      now
+    );
   }
 }

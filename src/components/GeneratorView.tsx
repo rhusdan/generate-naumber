@@ -17,18 +17,20 @@ import type { NumbersMetaResponse, VirtualNumber } from '../types';
 
 interface GeneratorViewProps {
   userBalance: number;
+  initialCategory?: string;
   onRented: (rentalId: string, newBalance: number) => void;
   onNotify: (type: 'success' | 'error' | 'info', title: string, message?: string) => void;
 }
 
-export function GeneratorView({ userBalance, onRented, onNotify }: GeneratorViewProps) {
+export function GeneratorView({ userBalance, initialCategory, onRented, onNotify }: GeneratorViewProps) {
   const [meta, setMeta] = useState<NumbersMetaResponse | null>(null);
   const [countryCode, setCountryCode] = useState('ALL');
   const [carrier, setCarrier] = useState('Semua Operator');
   const [providerCode, setProviderCode] = useState('all');
-  const [category, setCategory] = useState('Semua Kategori');
+  const [category, setCategory] = useState(initialCategory || 'Semua Kategori');
   const [selectedPreset, setSelectedPreset] = useState('');
   const [customPattern, setCustomPattern] = useState('');
+  const [generatingSixDigit, setGeneratingSixDigit] = useState(false);
 
   const [numbers, setNumbers] = useState<VirtualNumber[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,8 +83,42 @@ export function GeneratorView({ userBalance, onRented, onNotify }: GeneratorView
   };
 
   useEffect(() => {
-    fetchNumbers();
-  }, []);
+    const startCat = initialCategory || 'Semua Kategori';
+    setCategory(startCat);
+    fetchNumbers({ cat: startCat });
+  }, [initialCategory]);
+
+  const handleGenerateSixDigit = async () => {
+    setGeneratingSixDigit(true);
+    try {
+      const targetCountry = countryCode === 'ALL' ? 'ID' : countryCode;
+      const res = await apiRequest<{ pattern: string; phoneNumber: string; isDemo: boolean }>(
+        '/api/numbers/generate-six-digit',
+        {
+          method: 'POST',
+          body: JSON.stringify({ countryCode: targetCountry, carrier }),
+        }
+      );
+      setCategory('6 Digit Kembar');
+      setSelectedPreset('');
+      setCustomPattern(res.pattern);
+      await fetchNumbers({
+        country: countryCode,
+        cat: '6 Digit Kembar',
+        preset: '',
+        custom: res.pattern,
+      });
+      onNotify(
+        'success',
+        `Nomor 6 Digit Kembar dibuat (${res.pattern})`,
+        `[DEMO] ${res.phoneNumber} siap disewa.`
+      );
+    } catch (err) {
+      onNotify('error', 'Gagal membuat nomor 6 digit kembar', err instanceof Error ? err.message : undefined);
+    } finally {
+      setGeneratingSixDigit(false);
+    }
+  };
 
   const selectedCountryObj = meta?.countries.find((c) => c.code === countryCode);
   const availableCarriers = selectedCountryObj
@@ -192,14 +228,25 @@ export function GeneratorView({ userBalance, onRented, onNotify }: GeneratorView
               Filter berdasarkan negara, kode telepon, operator, kategori pola, atau masukkan pola angka kustom.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#070C1A] hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 inline-flex items-center gap-1.5 self-start sm:self-auto transition-colors whitespace-nowrap"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Reset Filter</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+            <button
+              type="button"
+              disabled={generatingSixDigit}
+              onClick={handleGenerateSixDigit}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-60"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{generatingSixDigit ? 'Membuat...' : 'Generate 6 Digit Kembar (DEMO)'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#070C1A] hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Reset Filter</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter Selectors */}
@@ -302,10 +349,14 @@ export function GeneratorView({ userBalance, onRented, onNotify }: GeneratorView
             <div className="flex flex-wrap items-center gap-2">
               {(
                 meta?.presetPatterns || [
-                  '777777',
-                  '888888',
                   '999999',
+                  '888888',
+                  '777777',
                   '666666',
+                  '555555',
+                  '444444',
+                  '333333',
+                  '222222',
                   '111111',
                   '000000',
                   '7777',

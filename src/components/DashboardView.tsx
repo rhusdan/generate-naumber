@@ -22,6 +22,7 @@ interface DashboardViewProps {
   loading: boolean;
   nowMs: number;
   onNavigateGenerator: () => void;
+  onNavigateSixDigit: () => void;
   onOpenInbox: (rentalId: string) => void;
   onReleaseRental: (rentalId: string) => Promise<void>;
   onCopyNumber: (phone: string) => void;
@@ -33,6 +34,7 @@ export function DashboardView({
   loading,
   nowMs,
   onNavigateGenerator,
+  onNavigateSixDigit,
   onOpenInbox,
   onReleaseRental,
   onCopyNumber,
@@ -101,6 +103,14 @@ export function DashboardView({
         </div>
 
         <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={onNavigateSixDigit}
+            className="w-full sm:w-auto min-h-[46px] px-4 py-2.5 rounded-xl bg-[#070C1A] hover:bg-slate-800 border border-slate-700 text-sky-300 text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
+          >
+            <Hash className="w-4 h-4" />
+            <span>6 Digit Kembar</span>
+          </button>
           <button
             type="button"
             onClick={onNavigateGenerator}

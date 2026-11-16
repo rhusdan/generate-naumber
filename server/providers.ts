@@ -43,10 +43,14 @@ export const PATTERN_CATEGORIES = [
 ];
 
 export const PRESET_PATTERNS = [
-  '777777',
-  '888888',
   '999999',
+  '888888',
+  '777777',
   '666666',
+  '555555',
+  '444444',
+  '333333',
+  '222222',
   '111111',
   '000000',
   '7777',
@@ -323,6 +327,37 @@ export async function releaseLiveNumber(params: {
       headers: { Authorization: `Basic ${auth}` },
     }).catch(() => undefined);
   }
+}
+
+export async function fetchLiveInboundSms(params: {
+  provider: ProviderMeta;
+  phoneNumber: string;
+  sinceMs: number;
+}): Promise<Array<{ sender: string; body: string; receivedAt: number }>> {
+  const creds = getResolvedCredentials(params.provider.id, params.provider.code);
+  if (params.provider.code === 'twilio' && creds.TWILIO_ACCOUNT_SID && creds.TWILIO_AUTH_TOKEN) {
+    const sid = creds.TWILIO_ACCOUNT_SID;
+    const auth = Buffer.from(`${sid}:${creds.TWILIO_AUTH_TOKEN}`).toString('base64');
+    const url = new URL(`${params.provider.api_base_url}/Accounts/${sid}/Messages.json`);
+    url.searchParams.set('To', params.phoneNumber);
+    url.searchParams.set('PageSize', '20');
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `Basic ${auth}` },
+    }).catch(() => null);
+    if (!resp || !resp.ok) return [];
+    const data = (await resp.json()) as {
+      messages?: Array<{ from?: string; body?: string; date_sent?: string; direction?: string }>;
+    };
+    return (data.messages || [])
+      .filter((m) => m.direction === 'inbound' && m.body)
+      .map((m) => ({
+        sender: m.from || 'CarrierSMS',
+        body: m.body || '',
+        receivedAt: m.date_sent ? Date.parse(m.date_sent) : Date.now(),
+      }))
+      .filter((m) => m.receivedAt >= params.sinceMs);
+  }
+  return [];
 }
 
 export function ensureDemoSandboxCustomMatch(params: {

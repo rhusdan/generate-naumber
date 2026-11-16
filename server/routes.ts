@@ -12,6 +12,7 @@ import {
   classifyPatternCategory,
   ensureDemoSandboxCustomMatch,
   extractOtpCode,
+  fetchLiveInboundSms,
   getCredentialStatuses,
   hasConfiguredLiveProvider,
   provisionLiveNumber,
@@ -388,7 +389,7 @@ export function registerApiRoutes(app: Express) {
     // In Demo Sandbox mode, ensure Custom Pattern returns matching DEMO-labeled candidate
     if (customPattern.length >= 2 && statusFilter === 'Available') {
       ensureDemoSandboxCustomMatch({
-        countryCode: countryCode || 'ID',
+        countryCode: !countryCode || countryCode === 'ALL' ? 'ID' : countryCode,
         carrier,
         customPattern,
       });
@@ -460,6 +461,44 @@ export function registerApiRoutes(app: Express) {
         expiresAt: r.expires_at,
       })),
       warning: liveApiWarning,
+    });
+  });
+
+  app.post('/api/numbers/generate-six-digit', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rawCountry = String(req.body?.countryCode || 'ID').trim().toUpperCase();
+    const country = COUNTRY_METADATA.find((c) => c.code === rawCountry) || COUNTRY_METADATA[0];
+    const requestedCarrier = String(req.body?.carrier || '').trim();
+    const chosenCarrier =
+      requestedCarrier && requestedCarrier !== 'Semua Operator' ? requestedCarrier : country.carriers[0];
+
+    const rawDigit = String(req.body?.digit ?? '').replace(/\D/g, '');
+    const digit = rawDigit.length >= 1 ? rawDigit[0] : String(Math.floor(Math.random() * 10));
+    const sixTwinPattern = digit.repeat(6);
+
+    const prefixDigits =
+      country.code === 'ID'
+        ? `81${Math.floor(1 + Math.random() * 8)}-${Math.floor(10 + Math.random() * 89)}`
+        : country.code === 'US'
+          ? `(415) ${Math.floor(10 + Math.random() * 89)}`
+          : `${Math.floor(71 + Math.random() * 28)}`;
+
+    const phoneNumber = `${country.dialCode} ${prefixDigits}-${sixTwinPattern}`;
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT OR IGNORE INTO virtual_numbers (
+        id, provider_id, phone_number, country_code, country_name, dial_code, carrier,
+        pattern_category, matched_pattern, price_10m, price_30m, price_1h, price_24h,
+        status, is_demo, created_at
+      ) VALUES (?, 'prov-demo', ?, ?, ?, ?, ?, '6 Digit Kembar', ?, 22000, 40000, 68000, 145000, 'Available', 1, ?)`
+    ).run(id, phoneNumber, country.code, country.name, country.dialCode, chosenCarrier, sixTwinPattern, now);
+
+    emitToAll('stats:updated', { timestamp: now });
+    res.status(201).json({
+      pattern: sixTwinPattern,
+      phoneNumber,
+      isDemo: true,
     });
   });
 
@@ -729,13 +768,22 @@ export function registerApiRoutes(app: Express) {
   // ==========================================
   // SMS & OTP INBOX (WITH STRICT PRIVACY & TTL)
   // ==========================================
-  app.get('/api/rentals/:id/sms', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/rentals/:id/sms', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     runExpirySweep();
 
     const rental = db
-      .prepare('SELECT id, status, expires_at, is_demo FROM rentals WHERE id = ? AND user_id = ?')
+      .prepare('SELECT id, number_id, phone_number, provider_code, started_at, status, expires_at, is_demo FROM rentals WHERE id = ? AND user_id = ?')
       .get(req.params.id, req.user!.userId) as
-      | { id: string; status: string; expires_at: number; is_demo: number }
+      | {
+          id: string;
+          number_id: string | null;
+          phone_number: string;
+          provider_code: string;
+          started_at: number;
+          status: string;
+          expires_at: number;
+          is_demo: number;
+        }
       | undefined;
 
     if (!rental) {
@@ -746,6 +794,42 @@ export function registerApiRoutes(app: Express) {
     if (rental.status !== 'Active') {
       res.json({ messages: [], expired: true });
       return;
+    }
+
+    if (rental.is_demo === 0) {
+      const prov = db.prepare('SELECT * FROM providers WHERE code = ?').get(rental.provider_code) as
+        | ProviderMeta
+        | undefined;
+      if (prov) {
+        const liveMsgs = await fetchLiveInboundSms({
+          provider: prov,
+          phoneNumber: rental.phone_number,
+          sinceMs: rental.started_at,
+        });
+        for (const lm of liveMsgs) {
+          const exists = db
+            .prepare('SELECT id FROM sms_messages WHERE rental_id = ? AND sender = ? AND body = ? AND received_at = ?')
+            .get(rental.id, lm.sender, lm.body, lm.receivedAt);
+          if (!exists) {
+            const msgExpiresAt = Math.min(rental.expires_at, lm.receivedAt + 5 * 60 * 1000);
+            if (msgExpiresAt > Date.now()) {
+              db.prepare(
+                `INSERT INTO sms_messages (id, rental_id, number_id, sender, body, otp_code, received_at, expires_at, is_demo)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+              ).run(
+                crypto.randomUUID(),
+                rental.id,
+                rental.number_id,
+                lm.sender,
+                lm.body,
+                extractOtpCode(lm.body),
+                lm.receivedAt,
+                msgExpiresAt
+              );
+            }
+          }
+        }
+      }
     }
 
     const messages = db
@@ -813,12 +897,13 @@ export function registerApiRoutes(app: Express) {
       return;
     }
 
-    const sender = String(req.body?.sender || 'BEAUTY-SANDBOX').trim().slice(0, 32);
-    const code = String(Math.floor(100000 + Math.random() * 899999));
+    const sender = String(req.body?.sender || 'BEAUTY-SANDBOX').trim().slice(0, 32) || 'BEAUTY-SANDBOX';
+    const rawCustomCode = String(req.body?.customCode || '').replace(/\D/g, '').slice(0, 8);
+    const code = rawCustomCode.length >= 4 ? rawCustomCode : String(Math.floor(100000 + Math.random() * 899999));
     const now = Date.now();
     // OTP TTL capped at 5 minutes OR rental expiry, whichever comes first
     const msgExpiresAt = Math.min(rental.expires_at, now + 5 * 60 * 1000);
-    const body = `[DEMO] Kode verifikasi uji coba Sandbox Anda adalah ${code}. Berlaku selama 5 menit. Jangan bagikan kode ini.`;
+    const body = `[DEMO] Kode verifikasi uji coba (${sender}) untuk ${rental.phone_number} adalah ${code}. Berlaku 5 menit.`;
     const msgId = crypto.randomUUID();
 
     db.prepare(

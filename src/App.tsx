@@ -30,6 +30,7 @@ export default function App() {
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [selectedRentalId, setSelectedRentalId] = useState<string | null>(null);
+  const [generatorInitialCategory, setGeneratorInitialCategory] = useState<string>('Semua Kategori');
   const [incomingPushCount, setIncomingPushCount] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -296,7 +297,14 @@ export default function App() {
               rentals={rentals}
               loading={loadingWorkspace}
               nowMs={nowMs}
-              onNavigateGenerator={() => setActiveTab('generator')}
+              onNavigateGenerator={() => {
+                setGeneratorInitialCategory('Semua Kategori');
+                setActiveTab('generator');
+              }}
+              onNavigateSixDigit={() => {
+                setGeneratorInitialCategory('6 Digit Kembar');
+                setActiveTab('generator');
+              }}
               onOpenInbox={(rentalId) => {
                 setSelectedRentalId(rentalId);
                 setActiveTab('inbox');
@@ -309,6 +317,7 @@ export default function App() {
           {activeTab === 'generator' && (
             <GeneratorView
               userBalance={user.balance}
+              initialCategory={generatorInitialCategory}
               onRented={(rentalId, newBalance) => {
                 setUser((prev) => (prev ? { ...prev, balance: newBalance } : prev));
                 setSelectedRentalId(rentalId);

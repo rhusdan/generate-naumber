@@ -43,6 +43,8 @@ export function InboxView({
   const [messages, setMessages] = useState<SmsMessage[]>([]);
   const [loadingSms, setLoadingSms] = useState(false);
   const [sendingDemo, setSendingDemo] = useState(false);
+  const [demoSender, setDemoSender] = useState('BEAUTY-SANDBOX');
+  const [demoCustomCode, setDemoCustomCode] = useState('');
 
   const activeRental =
     rentals.find((r) => r.id === selectedRentalId) ||
@@ -83,11 +85,23 @@ export function InboxView({
     if (!activeRental || !activeRental.isDemo || activeRental.status !== 'Active') return;
     setSendingDemo(true);
     try {
-      await apiRequest(`/api/rentals/${activeRental.id}/demo-sms`, {
+      const res = await apiRequest<{ message: SmsMessage }>(`/api/rentals/${activeRental.id}/demo-sms`, {
         method: 'POST',
-        body: JSON.stringify({ sender: 'BEAUTY-SANDBOX' }),
+        body: JSON.stringify({
+          sender: demoSender.trim() || 'BEAUTY-SANDBOX',
+          customCode: demoCustomCode.trim(),
+        }),
       });
-      await loadMessages(activeRental.id);
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === res.message.id)) return prev;
+        return [res.message, ...prev];
+      });
+      setDemoCustomCode('');
+      onNotify(
+        'success',
+        `OTP DEMO dibuat: ${res.message.otpCode || 'Terkirim'}`,
+        `Dari ${res.message.sender} ke ${activeRental.phoneNumber}`
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal mengirim SMS uji coba DEMO.';
       onNotify('error', 'Gagal', msg);
@@ -292,6 +306,63 @@ export function InboxView({
                   </div>
                 )}
 
+                {/* Prominent DEMO OTP Tester Panel when active rental is DEMO */}
+                {activeRental.status === 'Active' && activeRental.isDemo && (
+                  <div className="mt-5 rounded-xl bg-[#070C1A] border border-violet-500/30 p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-white">Buat OTP Uji Coba (Mode DEMO)</h3>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Nomor berlabel DEMO adalah sandbox internal (tidak menerima SMS dari WhatsApp/Google/bank). Untuk SMS asli, atur API Twilio/Vonage/Telnyx di Admin Console.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                      <div className="sm:col-span-4">
+                        <label className="block text-[11px] font-medium text-slate-300 mb-1" htmlFor="demo-sender">
+                          Nama Pengirim
+                        </label>
+                        <input
+                          id="demo-sender"
+                          type="text"
+                          maxLength={32}
+                          value={demoSender}
+                          onChange={(e) => setDemoSender(e.target.value)}
+                          placeholder="BEAUTY-SANDBOX"
+                          className="w-full min-h-[42px] px-3 bg-[#0D1528] border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-sky-400"
+                        />
+                      </div>
+                      <div className="sm:col-span-4">
+                        <label className="block text-[11px] font-medium text-slate-300 mb-1" htmlFor="demo-code">
+                          Kode OTP (opsional, 4–8 digit)
+                        </label>
+                        <input
+                          id="demo-code"
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={8}
+                          value={demoCustomCode}
+                          onChange={(e) => setDemoCustomCode(e.target.value.replace(/\D/g, ''))}
+                          placeholder="Kosong = 6 digit acak"
+                          className="w-full min-h-[42px] px-3 bg-[#0D1528] border border-slate-800 rounded-xl font-mono text-xs text-white placeholder:font-sans focus:outline-none focus:border-sky-400"
+                        />
+                      </div>
+                      <div className="sm:col-span-4">
+                        <button
+                          type="button"
+                          disabled={sendingDemo}
+                          onClick={handleTriggerDemoSms}
+                          className="w-full min-h-[42px] px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-sky-500 hover:from-violet-500 hover:to-sky-400 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 whitespace-nowrap"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{sendingDemo ? 'Membuat OTP...' : 'Buat & Kirim OTP (DEMO)'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Toolbar */}
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -309,18 +380,6 @@ export function InboxView({
                         <RefreshCw className={`w-3.5 h-3.5 ${loadingSms ? 'animate-spin' : ''}`} />
                         <span>Segarkan</span>
                       </button>
-
-                      {activeRental.isDemo && (
-                        <button
-                          type="button"
-                          disabled={sendingDemo}
-                          onClick={handleTriggerDemoSms}
-                          className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>{sendingDemo ? 'Mengirim...' : 'Kirim SMS Uji Coba (DEMO)'}</span>
-                        </button>
-                      )}
                     </div>
                   )}
                 </div>
@@ -330,21 +389,28 @@ export function InboxView({
                   {activeRental.status !== 'Active' ? (
                     <div className="py-8 text-center rounded-xl bg-[#070C1A] border border-slate-800/80 px-4">
                       <Clock className="w-7 h-7 text-slate-500 mx-auto" />
-                      <p className="mt-2.5 text-sm font-semibold text-slate-200">Masa sewa nomor telah kedaluwarsa</p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Demi privasi, seluruh SMS dan kode OTP pada sesi sewa ini telah dihapus secara otomatis.
+                      <p className="mt-2.5 text-sm font-semibold text-slate-200">Masa sewa nomor ini telah kedaluwarsa</p>
+                      <p className="mt-1 text-xs text-slate-400 max-w-md mx-auto">
+                        Untuk membuat atau menerima OTP, sewa nomor aktif terlebih dahulu melalui Generator Nomor.
                       </p>
+                      <button
+                        type="button"
+                        onClick={onNavigateGenerator}
+                        className="mt-4 min-h-[42px] px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold transition-colors"
+                      >
+                        Sewa Nomor Aktif di Generator
+                      </button>
                     </div>
                   ) : loadingSms && messages.length === 0 ? (
                     <div className="h-28 rounded-xl bg-slate-800/40 animate-pulse" />
                   ) : messages.length === 0 ? (
                     <div className="py-10 text-center rounded-xl bg-[#070C1A] border border-slate-800/80 px-4">
                       <MessageSquareText className="w-7 h-7 text-slate-500 mx-auto" />
-                      <p className="mt-2.5 text-sm font-semibold text-white">Menunggu SMS masuk...</p>
+                      <p className="mt-2.5 text-sm font-semibold text-white">Belum ada SMS/OTP masuk</p>
                       <p className="mt-1 text-xs text-slate-400 max-w-md mx-auto">
                         {activeRental.isDemo
-                          ? 'Ini adalah nomor sandbox DEMO. Klik tombol "Kirim SMS Uji Coba (DEMO)" di atas untuk menguji penerimaan OTP real-time.'
-                          : 'Pesan SMS resmi yang dikirim ke nomor ini akan muncul otomatis secara real-time.'}
+                          ? 'Klik tombol "Buat & Kirim OTP (DEMO)" di atas untuk langsung menghasilkan kode OTP uji coba ke nomor ini.'
+                          : 'Pesan SMS resmi yang dikirim ke nomor ini akan muncul otomatis secara real-time atau saat disegarkan.'}
                       </p>
                     </div>
                   ) : (
